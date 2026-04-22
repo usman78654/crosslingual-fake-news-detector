@@ -1,0 +1,89 @@
+================================================================================
+CROSS-LINGUAL FAKE NEWS DETECTION PROJECT
+Execution Summary & Status Report
+================================================================================
+
+REPORT DATE: April 22, 2026
+ENVIRONMENT: Windows, Python 3.13 (.venv), CPU mode verified
+OVERALL STATUS: IN PROGRESS
+
+================================================================================
+WHAT IS DONE
+================================================================================
+
+1) Week 1 - Data exploration
+- Completed successfully.
+- Outputs present in results/week1_exploration/:
+  - dataset_distribution.png
+  - english_combined.csv
+  - urdu_combined.csv
+
+2) Week 2 - Preprocessing and baseline
+- Completed successfully.
+- Processed datasets present in data/processed/:
+  - english_processed.csv, english_train.csv, english_test.csv
+  - urdu_processed.csv, urdu_train.csv, urdu_test.csv
+- Baseline outputs present in results/week2_preprocessing/:
+  - baseline_english_model.pkl
+  - baseline_results.png
+
+3) Requirements validation
+- requirements.txt reviewed against project imports.
+- Dependency import check passed in .venv for:
+  torch, transformers, pandas, numpy, scikit-learn, matplotlib,
+  seaborn, tensorboard, tqdm.
+
+================================================================================
+WHAT IS LEFT
+================================================================================
+
+1) Week 3 - Train English XLM-RoBERTa model
+- Pending in repo state (no committed artifacts under models/ yet).
+- Expected outputs:
+  - models/xlm_roberta_english/
+  - results/week3_model_training/
+
+2) Week 4 - Cross-lingual evaluation (English -> Urdu)
+- Pending.
+- Expected output: results/week4_cross_lingual/
+
+3) Week 5 - Joint training and Urdu fine-tuning
+- Pending.
+- Expected outputs:
+  - models/multilingual/
+  - models/finetuned_urdu/
+  - results/week5_joint_training/
+
+4) Week 6 - Final evaluation and reporting
+- Pending.
+- Expected output: results/week6_final/
+
+================================================================================
+HOW TO RUN
+================================================================================
+
+1) Activate virtual environment (PowerShell)
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+   .\.venv\Scripts\Activate.ps1
+
+2) Install dependencies
+   pip install -r requirements.txt
+
+3) Run full pipeline
+   python run_complete_pipeline.py
+
+4) Or run phase-by-phase
+   python 01_data_exploration.py
+   python 02_data_preprocessing.py
+   python 03_train_english_model.py
+   python 04_cross_lingual_eval.py
+   python 05_joint_training_finetuning.py
+   python 06_final_evaluation.py
+
+================================================================================
+NOTES
+================================================================================
+
+- CPU training for XLM-RoBERTa can take a long time.
+- A .gitignore is included to avoid committing local environment and generated
+  large artifacts by default.

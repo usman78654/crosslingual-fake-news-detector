@@ -1,0 +1,32 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Local tooling
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated training artifacts
+models/
+results/week3_model_training/
+results/week4_cross_lingual/
+results/week5_joint_training/
+results/week6_final/
+
+# Large generated exploratory exports
+results/week1_exploration/english_combined.csv
+
+# Python packaging/test outputs
+.pytest_cache/
+*.egg-info/
+build/
+dist/
