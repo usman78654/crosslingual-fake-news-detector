@@ -164,6 +164,14 @@ def main():
         print(f"  Fake: {(english_df['label']==0).sum()}")
         print(f"  True: {(english_df['label']==1).sum()}")
         
+        # IMPORTANT: Remove duplicates BEFORE train/test split to prevent data leakage
+        print(f"  Removing duplicate texts...")
+        before_dedup = len(english_df)
+        english_df = english_df.drop_duplicates(subset=['text'], keep='first')
+        after_dedup = len(english_df)
+        print(f"  Removed {before_dedup - after_dedup} duplicate texts")
+        print(f"  Samples after deduplication: {len(english_df)}")
+        
         # Save processed data
         english_df.to_csv('data/processed/english_processed.csv', index=False)
         print(f"  ✓ Saved to data/processed/english_processed.csv")
@@ -175,20 +183,27 @@ def main():
     # Load Urdu Dataset
     print("\n[2/4] Processing Urdu Dataset...")
     try:
-        # Try tab delimiter first for Urdu datasets
-        delimiters = ['\t', ',', ';']
+        # Urdu datasets have different delimiters: Fake News uses \t, True News uses ,
+        # Try multiple encodings as the file may have encoding issues
+        encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
         urdu_fake = None
         urdu_true = None
         
-        for delimiter in delimiters:
+        for encoding in encodings:
             try:
-                urdu_fake = pd.read_csv('Urdu_Dataset/Fake News.csv', delimiter=delimiter)
-                urdu_true = pd.read_csv('Urdu_Dataset/True News.csv', delimiter=delimiter)
-                if len(urdu_fake.columns) > 1:  # Successfully parsed multiple columns
-                    print(f"  Loaded with delimiter: {repr(delimiter)}")
-                    break
-            except:
+                print(f"  Trying encoding: {encoding}")
+                urdu_fake = pd.read_csv('Urdu_Dataset/Fake News.csv', encoding=encoding, delimiter='\t')
+                urdu_true = pd.read_csv('Urdu_Dataset/True News.csv', encoding=encoding, delimiter=',')
+                print(f"  ✓ Successfully loaded with {encoding}")
+                break
+            except Exception as e:
                 continue
+        
+        if urdu_fake is None:
+            raise ValueError("Could not load Urdu files with any encoding")
+        
+        print(f"  Fake News loaded: {urdu_fake.shape}, cols: {urdu_fake.columns.tolist()}")
+        print(f"  True News loaded: {urdu_true.shape}, cols: {urdu_true.columns.tolist()}")
         
         urdu_fake['label'] = 0
         urdu_true['label'] = 1
@@ -211,6 +226,14 @@ def main():
         print(f"  Total samples: {len(urdu_df)}")
         print(f"  Fake: {(urdu_df['label']==0).sum()}")
         print(f"  True: {(urdu_df['label']==1).sum()}")
+        
+        # IMPORTANT: Remove duplicates BEFORE train/test split to prevent data leakage
+        print(f"  Removing duplicate texts...")
+        before_dedup = len(urdu_df)
+        urdu_df = urdu_df.drop_duplicates(subset=['text'], keep='first')
+        after_dedup = len(urdu_df)
+        print(f"  Removed {before_dedup - after_dedup} duplicate texts")
+        print(f"  Samples after deduplication: {len(urdu_df)}")
         
         # Save processed data
         urdu_df.to_csv('data/processed/urdu_processed.csv', index=False)
