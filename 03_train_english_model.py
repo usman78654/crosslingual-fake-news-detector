@@ -18,6 +18,7 @@ from transformers import (
 )
 from torch.optim import AdamW
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
+from sklearn.model_selection import train_test_split
 import seaborn as sns
 from tqdm import tqdm
 import os
@@ -211,7 +212,7 @@ def main():
     EPOCHS = 10
     LEARNING_RATE = 2e-5
     MAX_LENGTH = 256
-    TARGET_ACCURACY = 0.90
+    VALIDATION_SPLIT = 0.1
     EARLY_STOPPING_PATIENCE = 2
     MIN_IMPROVEMENT = 1e-4
     USE_MIXED_PRECISION = True  # Enable for faster training on RTX 5080
@@ -221,15 +222,27 @@ def main():
     print(f"  Epochs: {EPOCHS}")
     print(f"  Learning rate: {LEARNING_RATE}")
     print(f"  Max length: {MAX_LENGTH}")
-    print(f"  Target accuracy: {TARGET_ACCURACY}")
+    print(f"  Validation split: {VALIDATION_SPLIT}")
+    print(f"  Early stopping patience: {EARLY_STOPPING_PATIENCE}")
     print(f"  Mixed precision: {USE_MIXED_PRECISION}")
     
     # Load data
     print(f"\n[1/6] Loading processed data...")
     train_df = pd.read_csv('data/processed/english_train.csv')
     test_df = pd.read_csv('data/processed/english_test.csv')
+
+    train_split_df, val_df = train_test_split(
+        train_df,
+        test_size=VALIDATION_SPLIT,
+        random_state=42,
+        stratify=train_df['label']
+    )
+    train_split_df = train_split_df.reset_index(drop=True)
+    val_df = val_df.reset_index(drop=True)
+    test_df = test_df.reset_index(drop=True)
     
-    print(f"  Train samples: {len(train_df)}")
+    print(f"  Train samples: {len(train_split_df)}")
+    print(f"  Validation samples: {len(val_df)}")
     print(f"  Test samples: {len(test_df)}")
     
     # Load tokenizer and model
@@ -250,7 +263,10 @@ def main():
     # Create datasets
     print(f"\n[3/6] Creating datasets...")
     train_dataset = FakeNewsDataset(
-        train_df['text'], train_df['label'], tokenizer, MAX_LENGTH
+        train_split_df['text'], train_split_df['label'], tokenizer, MAX_LENGTH
+    )
+    val_dataset = FakeNewsDataset(
+        val_df['text'], val_df['label'], tokenizer, MAX_LENGTH
     )
     test_dataset = FakeNewsDataset(
         test_df['text'], test_df['label'], tokenizer, MAX_LENGTH
@@ -268,6 +284,13 @@ def main():
         num_workers=num_workers,
         persistent_workers=num_workers > 0
     )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        pin_memory=True if torch.cuda.is_available() else False,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0
+    )
     test_loader = DataLoader(
         test_dataset, 
         batch_size=BATCH_SIZE, 
@@ -277,6 +300,7 @@ def main():
     )
     
     print(f"  Train batches: {len(train_loader)}")
+    print(f"  Validation batches: {len(val_loader)}")
     print(f"  Test batches: {len(test_loader)}")
     
     # Optimizer and scheduler
@@ -300,13 +324,14 @@ def main():
     
     history = {
         'train_loss': [],
-        'test_loss': [],
-        'test_accuracy': [],
-        'test_f1': []
+        'val_loss': [],
+        'val_accuracy': [],
+        'val_f1': []
     }
 
-    best_accuracy = 0.0
+    best_val_f1 = -1.0
     epochs_without_improvement = 0
+    best_model_state = None
     
     for epoch in range(EPOCHS):
         print(f"\nEpoch {epoch + 1}/{EPOCHS}")
@@ -315,38 +340,46 @@ def main():
         train_loss = train_epoch(model, train_loader, optimizer, scheduler, device, scaler)
         print(f"Training loss: {train_loss:.4f}")
         
-        test_metrics = evaluate(model, test_loader, device, scaler)
-        print(f"Test loss: {test_metrics['loss']:.4f}")
-        print(f"Test accuracy: {test_metrics['accuracy']:.4f}")
-        print(f"Test F1: {test_metrics['f1']:.4f}")
+        val_metrics = evaluate(model, val_loader, device, scaler)
+        print(f"Validation loss: {val_metrics['loss']:.4f}")
+        print(f"Validation accuracy: {val_metrics['accuracy']:.4f}")
+        print(f"Validation F1: {val_metrics['f1']:.4f}")
         
         history['train_loss'].append(train_loss)
-        history['test_loss'].append(test_metrics['loss'])
-        history['test_accuracy'].append(test_metrics['accuracy'])
-        history['test_f1'].append(test_metrics['f1'])
+        history['val_loss'].append(val_metrics['loss'])
+        history['val_accuracy'].append(val_metrics['accuracy'])
+        history['val_f1'].append(val_metrics['f1'])
 
-        # Stop early once accuracy is >= 90% and no longer improving
-        current_accuracy = test_metrics['accuracy']
-        if current_accuracy > best_accuracy + MIN_IMPROVEMENT:
-            best_accuracy = current_accuracy
+        # Keep the best model by validation F1 and stop when it plateaus.
+        current_val_f1 = val_metrics['f1']
+        if current_val_f1 > best_val_f1 + MIN_IMPROVEMENT:
+            best_val_f1 = current_val_f1
             epochs_without_improvement = 0
-        elif best_accuracy >= TARGET_ACCURACY:
+            best_model_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
+        else:
             epochs_without_improvement += 1
             print(
-                f"Accuracy >= {TARGET_ACCURACY:.2f} but not improving "
+                f"Validation F1 not improving "
                 f"(patience {epochs_without_improvement}/{EARLY_STOPPING_PATIENCE})."
             )
 
-        if best_accuracy >= TARGET_ACCURACY and epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
+        if epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
             print(
-                f"Early stopping: accuracy plateaued above {TARGET_ACCURACY:.2f}. "
-                f"Best accuracy: {best_accuracy:.4f}"
+                f"Early stopping: validation F1 plateaued. "
+                f"Best validation F1: {best_val_f1:.4f}"
             )
             break
         
         # Clear GPU cache to prevent memory fragmentation
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        print("\nLoaded best checkpoint based on validation F1.")
     
     # Save model
     print(f"\n[6/6] Saving model...")
@@ -361,7 +394,7 @@ def main():
     
     # Final evaluation
     print(f"\n{'='*60}")
-    print("Final English Model Performance")
+    print("Final English Model Performance (Held-Out Test Set)")
     print('='*60)
     
     final_metrics = evaluate(model, test_loader, device, scaler)
@@ -377,7 +410,14 @@ def main():
         'accuracy': float(final_metrics['accuracy']),
         'precision': float(final_metrics['precision']),
         'recall': float(final_metrics['recall']),
-        'f1': float(final_metrics['f1'])
+        'f1': float(final_metrics['f1']),
+        'best_validation_f1': float(best_val_f1),
+        'selection_metric': 'validation_f1',
+        'data_split': {
+            'train_samples': int(len(train_split_df)),
+            'validation_samples': int(len(val_df)),
+            'test_samples': int(len(test_df))
+        }
     }
     
     with open('results/week3_model_training/english_metrics.json', 'w') as f:
@@ -391,8 +431,8 @@ def main():
     # Training curves - Fixed to use actual history length
     epochs_range = range(1, len(history['train_loss']) + 1)
     axes[0].plot(epochs_range, history['train_loss'], 'b-', label='Train Loss', linewidth=2)
-    axes[0].plot(epochs_range, history['test_loss'], 'r-', label='Test Loss', linewidth=2)
-    axes[0].set_title('Training and Test Loss', fontsize=14, fontweight='bold')
+    axes[0].plot(epochs_range, history['val_loss'], 'r-', label='Validation Loss', linewidth=2)
+    axes[0].set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
     axes[0].set_xlabel('Epoch')
     axes[0].set_ylabel('Loss')
     axes[0].legend()

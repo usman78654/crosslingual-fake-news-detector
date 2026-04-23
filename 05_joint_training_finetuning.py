@@ -18,6 +18,7 @@ from transformers import (
 )
 from torch.optim import AdamW
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
+from sklearn.model_selection import train_test_split
 import seaborn as sns
 from tqdm import tqdm
 import os
@@ -120,16 +121,16 @@ def evaluate(model, dataloader, device):
         'true_labels': true_labels
     }
 
-def train_model(model, train_loader, test_loader_dict, optimizer, scheduler, 
+def train_model(model, train_loader, eval_loader_dict, optimizer, scheduler, 
                 epochs, device, model_name):
     """Train model and track performance"""
     
     history = {
         'train_loss': [],
-        'english_acc': [],
-        'urdu_acc': [],
-        'english_f1': [],
-        'urdu_f1': []
+        'english_val_acc': [],
+        'urdu_val_acc': [],
+        'english_val_f1': [],
+        'urdu_val_f1': []
     }
     
     for epoch in range(epochs):
@@ -139,17 +140,17 @@ def train_model(model, train_loader, test_loader_dict, optimizer, scheduler,
         train_loss = train_epoch(model, train_loader, optimizer, scheduler, device)
         print(f"Training loss: {train_loss:.4f}")
         
-        # Evaluate on both test sets
-        for lang, loader in test_loader_dict.items():
+        # Evaluate on both validation sets
+        for lang, loader in eval_loader_dict.items():
             metrics = evaluate(model, loader, device)
-            print(f"{lang.capitalize()} - Acc: {metrics['accuracy']:.4f}, F1: {metrics['f1']:.4f}")
+            print(f"{lang.capitalize()} validation - Acc: {metrics['accuracy']:.4f}, F1: {metrics['f1']:.4f}")
             
             if lang == 'english':
-                history['english_acc'].append(metrics['accuracy'])
-                history['english_f1'].append(metrics['f1'])
+                history['english_val_acc'].append(metrics['accuracy'])
+                history['english_val_f1'].append(metrics['f1'])
             else:
-                history['urdu_acc'].append(metrics['accuracy'])
-                history['urdu_f1'].append(metrics['f1'])
+                history['urdu_val_acc'].append(metrics['accuracy'])
+                history['urdu_val_f1'].append(metrics['f1'])
         
         history['train_loss'].append(train_loss)
     
@@ -169,6 +170,7 @@ def main():
     BATCH_SIZE = 16
     MAX_LENGTH = 256
     LEARNING_RATE = 2e-5
+    VALIDATION_SPLIT = 0.1
     
     # ========== Experiment 1: Joint Multilingual Training ==========
     print("\n" + "="*60)
@@ -185,13 +187,32 @@ def main():
     if len(english_train) > len(urdu_train) * 3:
         english_train = english_train.sample(n=len(urdu_train) * 3, random_state=42)
         print(f"  Sampled English to {len(english_train)} samples for balance")
+
+    english_train_split, english_val = train_test_split(
+        english_train,
+        test_size=VALIDATION_SPLIT,
+        random_state=42,
+        stratify=english_train['label']
+    )
+    urdu_train_split, urdu_val = train_test_split(
+        urdu_train,
+        test_size=VALIDATION_SPLIT,
+        random_state=42,
+        stratify=urdu_train['label']
+    )
+
+    english_train_split = english_train_split.reset_index(drop=True)
+    english_val = english_val.reset_index(drop=True)
+    urdu_train_split = urdu_train_split.reset_index(drop=True)
+    urdu_val = urdu_val.reset_index(drop=True)
     
     # Combine datasets
-    combined_train = pd.concat([english_train, urdu_train], ignore_index=True)
+    combined_train = pd.concat([english_train_split, urdu_train_split], ignore_index=True)
     combined_train = combined_train.sample(frac=1, random_state=42).reset_index(drop=True)
     
     print(f"  Combined train: {len(combined_train)} samples")
-    print(f"    English: {len(english_train)}, Urdu: {len(urdu_train)}")
+    print(f"    English train: {len(english_train_split)}, Urdu train: {len(urdu_train_split)}")
+    print(f"  Validation - English: {len(english_val)}, Urdu: {len(urdu_val)}")
     print(f"  English test: {len(english_test)} samples")
     print(f"  Urdu test: {len(urdu_test)} samples")
     
@@ -207,6 +228,12 @@ def main():
     train_dataset = FakeNewsDataset(
         combined_train['text'], combined_train['label'], tokenizer, MAX_LENGTH
     )
+    english_val_dataset = FakeNewsDataset(
+        english_val['text'], english_val['label'], tokenizer, MAX_LENGTH
+    )
+    urdu_val_dataset = FakeNewsDataset(
+        urdu_val['text'], urdu_val['label'], tokenizer, MAX_LENGTH
+    )
     english_test_dataset = FakeNewsDataset(
         english_test['text'], english_test['label'], tokenizer, MAX_LENGTH
     )
@@ -215,6 +242,8 @@ def main():
     )
     
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    english_val_loader = DataLoader(english_val_dataset, batch_size=BATCH_SIZE)
+    urdu_val_loader = DataLoader(urdu_val_dataset, batch_size=BATCH_SIZE)
     english_test_loader = DataLoader(english_test_dataset, batch_size=BATCH_SIZE)
     urdu_test_loader = DataLoader(urdu_test_dataset, batch_size=BATCH_SIZE)
     
@@ -228,7 +257,7 @@ def main():
     
     history_joint = train_model(
         model_joint, train_loader,
-        {'english': english_test_loader, 'urdu': urdu_test_loader},
+        {'english': english_val_loader, 'urdu': urdu_val_loader},
         optimizer, scheduler, EPOCHS_JOINT, device, 'joint'
     )
     
@@ -261,7 +290,7 @@ def main():
     
     print(f"\n[6/7] Fine-tuning on Urdu dataset...")
     urdu_train_dataset = FakeNewsDataset(
-        urdu_train['text'], urdu_train['label'], tokenizer, MAX_LENGTH
+        urdu_train_split['text'], urdu_train_split['label'], tokenizer, MAX_LENGTH
     )
     urdu_train_loader = DataLoader(urdu_train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     
@@ -274,7 +303,7 @@ def main():
     
     history_finetune = train_model(
         model_finetuned, urdu_train_loader,
-        {'english': english_test_loader, 'urdu': urdu_test_loader},
+        {'english': english_val_loader, 'urdu': urdu_val_loader},
         optimizer_ft, scheduler_ft, EPOCHS_FINETUNE, device, 'finetuned'
     )
     

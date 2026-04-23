@@ -3,9 +3,9 @@ CROSS-LINGUAL FAKE NEWS DETECTION PROJECT
 Execution Summary & Status Report
 ================================================================================
 
-REPORT DATE: April 22, 2026
+REPORT DATE: April 24, 2026
 ENVIRONMENT: Windows, Python 3.13 (.venv), CPU mode verified
-OVERALL STATUS: IN PROGRESS
+OVERALL STATUS: COMPLETED (ALL WEEKS EXECUTED)
 
 ================================================================================
 WHAT IS DONE
@@ -25,9 +25,51 @@ WHAT IS DONE
   - urdu_processed.csv, urdu_train.csv, urdu_test.csv
 - Baseline outputs present in results/week2_preprocessing/:
   - baseline_english_model.pkl
+  - baseline_urdu_model.pkl
   - baseline_results.png
 
-3) Requirements validation
+3) Week 3 - English XLM-RoBERTa model training
+- Completed successfully.
+- Model artifacts present in models/xlm_roberta_english/:
+  - config.json
+  - model.safetensors
+  - tokenizer_config.json
+  - tokenizer.json
+- Outputs present in results/week3_model_training/:
+  - english_metrics.json
+  - training_history.json
+  - english_model_results.png
+
+4) Week 4 - Cross-lingual evaluation (English -> Urdu)
+- Completed successfully.
+- Outputs present in results/week4_cross_lingual/:
+  - cross_lingual_results.json
+  - cross_lingual_evaluation.png
+
+5) Week 5 - Joint training and Urdu fine-tuning
+- Completed successfully.
+- Joint model artifacts present in models/multilingual/xlm_roberta_joint/:
+  - config.json
+  - model.safetensors
+  - tokenizer_config.json
+  - tokenizer.json
+- Fine-tuned Urdu artifacts present in models/finetuned_urdu/xlm_roberta_finetuned/:
+  - config.json
+  - model.safetensors
+  - tokenizer_config.json
+  - tokenizer.json
+- Outputs present in results/week5_joint_training/:
+  - comparison.json
+  - comprehensive_comparison.png
+
+6) Week 6 - Final evaluation and reporting
+- Completed successfully.
+- Outputs present in results/week6_final/:
+  - FINAL_REPORT.txt
+  - complete_dashboard.png
+  - presentation_summary.png
+
+7) Requirements validation
 - requirements.txt reviewed against project imports.
 - Dependency import check passed in .venv for:
   torch, transformers, pandas, numpy, scikit-learn, matplotlib,
@@ -37,26 +79,14 @@ WHAT IS DONE
 WHAT IS LEFT
 ================================================================================
 
-1) Week 3 - Train English XLM-RoBERTa model
-- Pending in repo state (no committed artifacts under models/ yet).
-- Expected outputs:
-  - models/xlm_roberta_english/
-  - results/week3_model_training/
+1) Mandatory project phases
+- None. Weeks 1 through 6 are complete and all expected artifacts are present.
 
-2) Week 4 - Cross-lingual evaluation (English -> Urdu)
-- Pending.
-- Expected output: results/week4_cross_lingual/
-
-3) Week 5 - Joint training and Urdu fine-tuning
-- Pending.
-- Expected outputs:
-  - models/multilingual/
-  - models/finetuned_urdu/
-  - results/week5_joint_training/
-
-4) Week 6 - Final evaluation and reporting
-- Pending.
-- Expected output: results/week6_final/
+2) Optional next steps
+- Add external validation on unseen, real-world English and Urdu news sources.
+- Expand to additional low-resource languages (for example Hindi/Arabic).
+- Increase Urdu dataset size and evaluate robustness to domain shift.
+- Package model inference as a lightweight API for deployment.
 
 ================================================================================
 HOW TO RUN
@@ -87,3 +117,4 @@ NOTES
 - CPU training for XLM-RoBERTa can take a long time.
 - A .gitignore is included to avoid committing local environment and generated
   large artifacts by default.
+- This status file now reflects the artifact state observed on April 24, 2026.
