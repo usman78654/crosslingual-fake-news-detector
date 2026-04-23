@@ -1,6 +1,7 @@
 """
 Week 3: XLM-RoBERTa Implementation - English Training
 Train multilingual transformer on English dataset
+Optimized for NVIDIA RTX 5080 GPU
 """
 
 import matplotlib
@@ -10,6 +11,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from transformers import (
     XLMRobertaTokenizer, 
     XLMRobertaForSequenceClassification,
@@ -22,12 +24,19 @@ from tqdm import tqdm
 import os
 import json
 
-# Check for GPU
+# Check for GPU and optimize
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"\n{'='*60}")
 print(f"Using device: {device}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+    # Enable TF32 for faster computation on RTX 5080
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    print(f"TensorFloat32: Enabled for faster computation")
+else:
+    print("WARNING: CUDA not available, using CPU (training will be slow)")
 print('='*60)
 
 class FakeNewsDataset(Dataset):
@@ -61,8 +70,8 @@ class FakeNewsDataset(Dataset):
             'labels': torch.tensor(label, dtype=torch.long)
         }
 
-def train_epoch(model, dataloader, optimizer, scheduler, device):
-    """Train for one epoch"""
+def train_epoch(model, dataloader, optimizer, scheduler, device, scaler=None):
+    """Train for one epoch with optional mixed precision"""
     model.train()
     total_loss = 0
     
@@ -74,26 +83,41 @@ def train_epoch(model, dataloader, optimizer, scheduler, device):
         attention_mask = batch['attention_mask'].to(device)
         labels = batch['labels'].to(device)
         
-        outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels
-        )
+        if scaler is not None:
+            # Mixed precision training for faster computation on RTX 5080
+            with autocast(dtype=torch.float16):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+                loss = outputs.loss
+            
+            scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # Standard training
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            
+            loss = outputs.loss
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
         
-        loss = outputs.loss
-        total_loss += loss.item()
-        
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
         scheduler.step()
-        
+        total_loss += loss.item()
         progress_bar.set_postfix({'loss': loss.item()})
     
     return total_loss / len(dataloader)
 
-def evaluate(model, dataloader, device):
-    """Evaluate model"""
+def evaluate(model, dataloader, device, scaler=None):
+    """Evaluate model with optional mixed precision"""
     model.eval()
     predictions = []
     true_labels = []
@@ -105,11 +129,19 @@ def evaluate(model, dataloader, device):
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
             
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels
-            )
+            if scaler is not None:
+                with autocast(dtype=torch.float16):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels
+                    )
+            else:
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
             
             total_loss += outputs.loss.item()
             logits = outputs.logits
@@ -137,23 +169,30 @@ def main():
     print("\n" + "="*60)
     print("CROSS-LINGUAL FAKE NEWS DETECTION")
     print("Week 3: XLM-RoBERTa Training (English)")
+    print("Optimized for NVIDIA RTX 5080")
     print("="*60)
     
     # Create directories
     os.makedirs('results/week3_model_training', exist_ok=True)
     os.makedirs('models', exist_ok=True)
     
-    # Hyperparameters
-    BATCH_SIZE = 16
-    EPOCHS = 3
+    # Hyperparameters - Optimized for RTX 5080 (16GB VRAM)
+    BATCH_SIZE = 32  # Larger batch size for RTX 5080
+    EPOCHS = 10
     LEARNING_RATE = 2e-5
     MAX_LENGTH = 256
+    TARGET_ACCURACY = 0.90
+    EARLY_STOPPING_PATIENCE = 2
+    MIN_IMPROVEMENT = 1e-4
+    USE_MIXED_PRECISION = True  # Enable for faster training on RTX 5080
     
-    print(f"\nHyperparameters:")
+    print(f"\nHyperparameters (RTX 5080 Optimized):")
     print(f"  Batch size: {BATCH_SIZE}")
     print(f"  Epochs: {EPOCHS}")
     print(f"  Learning rate: {LEARNING_RATE}")
     print(f"  Max length: {MAX_LENGTH}")
+    print(f"  Target accuracy: {TARGET_ACCURACY}")
+    print(f"  Mixed precision: {USE_MIXED_PRECISION}")
     
     # Load data
     print(f"\n[1/6] Loading processed data...")
@@ -172,6 +211,10 @@ def main():
     )
     model.to(device)
     
+    # Enable gradient checkpointing to save GPU memory
+    if torch.cuda.is_available():
+        model.gradient_checkpointing_enable()
+    
     print(f"  ✓ Model loaded with {sum(p.numel() for p in model.parameters()):,} parameters")
     
     # Create datasets
@@ -183,8 +226,20 @@ def main():
         test_df['text'], test_df['label'], tokenizer, MAX_LENGTH
     )
     
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
+    # Use pin_memory for faster GPU data transfer
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=BATCH_SIZE, 
+        shuffle=True, 
+        pin_memory=True if torch.cuda.is_available() else False,
+        num_workers=2 if torch.cuda.is_available() else 0
+    )
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=BATCH_SIZE, 
+        pin_memory=True if torch.cuda.is_available() else False,
+        num_workers=2 if torch.cuda.is_available() else 0
+    )
     
     print(f"  Train batches: {len(train_loader)}")
     print(f"  Test batches: {len(test_loader)}")
@@ -199,6 +254,11 @@ def main():
         num_training_steps=total_steps
     )
     
+    # Mixed precision scaler
+    scaler = GradScaler() if (USE_MIXED_PRECISION and torch.cuda.is_available()) else None
+    if scaler:
+        print("  ✓ Mixed precision training enabled")
+    
     # Training loop
     print(f"\n[5/6] Training model...")
     print("="*60)
@@ -209,15 +269,18 @@ def main():
         'test_accuracy': [],
         'test_f1': []
     }
+
+    best_accuracy = 0.0
+    epochs_without_improvement = 0
     
     for epoch in range(EPOCHS):
         print(f"\nEpoch {epoch + 1}/{EPOCHS}")
         print("-" * 60)
         
-        train_loss = train_epoch(model, train_loader, optimizer, scheduler, device)
+        train_loss = train_epoch(model, train_loader, optimizer, scheduler, device, scaler)
         print(f"Training loss: {train_loss:.4f}")
         
-        test_metrics = evaluate(model, test_loader, device)
+        test_metrics = evaluate(model, test_loader, device, scaler)
         print(f"Test loss: {test_metrics['loss']:.4f}")
         print(f"Test accuracy: {test_metrics['accuracy']:.4f}")
         print(f"Test F1: {test_metrics['f1']:.4f}")
@@ -226,6 +289,29 @@ def main():
         history['test_loss'].append(test_metrics['loss'])
         history['test_accuracy'].append(test_metrics['accuracy'])
         history['test_f1'].append(test_metrics['f1'])
+
+        # Stop early once accuracy is >= 90% and no longer improving
+        current_accuracy = test_metrics['accuracy']
+        if current_accuracy > best_accuracy + MIN_IMPROVEMENT:
+            best_accuracy = current_accuracy
+            epochs_without_improvement = 0
+        elif best_accuracy >= TARGET_ACCURACY:
+            epochs_without_improvement += 1
+            print(
+                f"Accuracy >= {TARGET_ACCURACY:.2f} but not improving "
+                f"(patience {epochs_without_improvement}/{EARLY_STOPPING_PATIENCE})."
+            )
+
+        if best_accuracy >= TARGET_ACCURACY and epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
+            print(
+                f"Early stopping: accuracy plateaued above {TARGET_ACCURACY:.2f}. "
+                f"Best accuracy: {best_accuracy:.4f}"
+            )
+            break
+        
+        # Clear GPU cache to prevent memory fragmentation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     # Save model
     print(f"\n[6/6] Saving model...")
@@ -243,7 +329,7 @@ def main():
     print("Final English Model Performance")
     print('='*60)
     
-    final_metrics = evaluate(model, test_loader, device)
+    final_metrics = evaluate(model, test_loader, device, scaler)
     
     print(f"\nMetrics:")
     print(f"  Accuracy: {final_metrics['accuracy']:.4f}")
@@ -262,13 +348,13 @@ def main():
     with open('results/week3_model_training/english_metrics.json', 'w') as f:
         json.dump(metrics_dict, f, indent=2)
     
-    # Confusion Matrix
+    # Confusion Matrix and Visualizations
     cm = confusion_matrix(final_metrics['true_labels'], final_metrics['predictions'])
     
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
-    # Training curves
-    epochs_range = range(1, EPOCHS + 1)
+    # Training curves - Fixed to use actual history length
+    epochs_range = range(1, len(history['train_loss']) + 1)
     axes[0].plot(epochs_range, history['train_loss'], 'b-', label='Train Loss', linewidth=2)
     axes[0].plot(epochs_range, history['test_loss'], 'r-', label='Test Loss', linewidth=2)
     axes[0].set_title('Training and Test Loss', fontsize=14, fontweight='bold')
@@ -294,7 +380,7 @@ def main():
     print("✅ Week 3 - English Model Training Complete!")
     print("="*60)
     print("\nDeliverables:")
-    print("  ✔ XLM-RoBERTa trained on English data")
+    print("  ✔ XLM-RoBERTa trained on English data (RTX 5080 optimized)")
     print(f"  ✔ Model accuracy: {final_metrics['accuracy']:.4f}")
     print(f"  ✔ Model F1-score: {final_metrics['f1']:.4f}")
     print("  ✔ Model saved for cross-lingual testing")
