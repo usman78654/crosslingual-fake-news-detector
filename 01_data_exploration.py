@@ -9,12 +9,87 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 import os
+import re
 
 # Set style
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (12, 6)
 
-def explore_dataset(fake_path, true_path, dataset_name):
+
+def normalize_column_name(col_name):
+    """Normalize column names for robust matching."""
+    clean = str(col_name).replace('\ufeff', '').strip().lower()
+    clean = re.sub(r'\s+', ' ', clean)
+    return clean
+
+
+def read_csv_with_fallback(file_path, read_options, encodings):
+    """Try multiple encoding + read options and return first valid parse."""
+    last_error = None
+
+    for options in read_options:
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(file_path, encoding=encoding, **options)
+                if len(df.columns) <= 1:
+                    continue
+
+                df.columns = [str(col).replace('\ufeff', '').strip() for col in df.columns]
+                return df, encoding, options
+            except Exception as exc:
+                last_error = exc
+
+    raise ValueError(
+        f"Could not parse {file_path} with provided encodings/options. "
+        f"Last error: {last_error}"
+    )
+
+
+def select_text_column(df, preferred_columns):
+    """Pick text column by preference, then fallback to object columns."""
+    normalized = {normalize_column_name(col): col for col in df.columns}
+
+    for preferred in preferred_columns:
+        candidate = normalized.get(normalize_column_name(preferred))
+        if candidate is not None:
+            return candidate
+
+    excluded = {
+        'label', 'sr. no.', 'sr. no', 'sr no', 'sr_no', 'index', 'date', 'subject'
+    }
+    for col in df.columns:
+        if df[col].dtype == 'object' and normalize_column_name(col) not in excluded:
+            return col
+
+    return None
+
+
+def print_text_quality(df, text_column, dataset_name):
+    """Print lightweight text quality checks to surface corrupted inputs."""
+    text_values = df[text_column].astype(str)
+    lengths = text_values.str.len().clip(lower=1)
+    question_density = text_values.str.count(r'\?') / lengths
+    control_chars = text_values.str.contains(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', regex=True)
+
+    heavy_question_rows = (question_density > 0.5).mean() * 100
+    control_char_rows = control_chars.mean() * 100
+
+    print(f"\nText quality checks ({dataset_name}):")
+    print(f"  Rows with >50% '?' characters: {heavy_question_rows:.2f}%")
+    print(f"  Rows with control characters: {control_char_rows:.2f}%")
+    if heavy_question_rows > 20:
+        print("  WARNING: High '?' ratio detected. Source text may be partially corrupted.")
+
+
+def explore_dataset(
+    fake_path,
+    true_path,
+    dataset_name,
+    fake_read_options,
+    true_read_options,
+    fake_encodings,
+    true_encodings,
+):
     """Explore and visualize dataset statistics"""
     print(f"\n{'='*60}")
     print(f"{dataset_name} Dataset Exploration")
@@ -22,28 +97,25 @@ def explore_dataset(fake_path, true_path, dataset_name):
     
     # Load datasets
     print(f"\nLoading {dataset_name} datasets...")
-    # Try different encodings and delimiters
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
-    delimiters = [',', '\t', ';']
-    fake_df = None
-    true_df = None
-    
-    for encoding in encodings:
-        for delimiter in delimiters:
-            try:
-                fake_df = pd.read_csv(fake_path, encoding=encoding, delimiter=delimiter)
-                true_df = pd.read_csv(true_path, encoding=encoding, delimiter=delimiter)
-                # Check if we have multiple columns (successful parse)
-                if len(fake_df.columns) > 1:
-                    print(f"  Successfully loaded with encoding: {encoding}, delimiter: {repr(delimiter)}")
-                    break
-            except (UnicodeDecodeError, Exception):
-                continue
-        if fake_df is not None and len(fake_df.columns) > 1:
-            break
-    
-    if fake_df is None or true_df is None:
-        raise ValueError(f"Could not load datasets with any supported encoding")
+    fake_df, fake_encoding, fake_options = read_csv_with_fallback(
+        fake_path,
+        read_options=fake_read_options,
+        encodings=fake_encodings,
+    )
+    true_df, true_encoding, true_options = read_csv_with_fallback(
+        true_path,
+        read_options=true_read_options,
+        encodings=true_encodings,
+    )
+
+    print(
+        f"  Fake file loaded with encoding={fake_encoding}, "
+        f"options={fake_options}"
+    )
+    print(
+        f"  True file loaded with encoding={true_encoding}, "
+        f"options={true_options}"
+    )
     
     # Add labels
     fake_df['label'] = 0  # Fake
@@ -65,16 +137,13 @@ def explore_dataset(fake_path, true_path, dataset_name):
     print(df.isnull().sum())
     
     # Text length analysis
-    text_column = None
-    for col in df.columns:
-        if 'text' in col.lower() or 'news' in col.lower() or 'title' in col.lower():
-            text_column = col
-            break
+    text_column = select_text_column(df, ['text', 'news items', 'news', 'title', 'content'])
     
     if text_column:
         df['text_length'] = df[text_column].astype(str).str.len()
         print(f"\nText length statistics ({text_column}):")
         print(df.groupby('label')['text_length'].describe())
+        print_text_quality(df, text_column, dataset_name)
     
     return df
 
@@ -94,7 +163,11 @@ def main():
         english_df = explore_dataset(
             'EnglishDataset/Fake.csv',
             'EnglishDataset/True.csv',
-            'English'
+            'English',
+            fake_read_options=[{'delimiter': ','}],
+            true_read_options=[{'delimiter': ','}],
+            fake_encodings=['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1'],
+            true_encodings=['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1'],
         )
         
         # Save combined English dataset
@@ -112,7 +185,11 @@ def main():
         urdu_df = explore_dataset(
             'Urdu_Dataset/Fake News.csv',
             'Urdu_Dataset/True News.csv',
-            'Urdu'
+            'Urdu',
+            fake_read_options=[{'delimiter': '\t'}],
+            true_read_options=[{'delimiter': ','}],
+            fake_encodings=['cp1256', 'latin-1', 'cp1252', 'iso-8859-1'],
+            true_encodings=['utf-8-sig', 'utf-8', 'cp1256', 'latin-1'],
         )
         
         # Save combined Urdu dataset

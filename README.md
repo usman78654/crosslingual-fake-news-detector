@@ -128,7 +128,7 @@ python 06_final_evaluation.py
 - Save trained model
 
 **Outputs:** `models/xlm_roberta_english/`, `results/week3_model_training/`
-**Current state:** Pending/partially run (artifacts not yet committed)
+**Current state:** Completed
 
 ### Week 4: Cross-Lingual Transfer Evaluation
 - Test English model on Urdu (zero-shot)
@@ -137,7 +137,7 @@ python 06_final_evaluation.py
 - Generate evaluation metrics
 
 **Outputs:** `results/week4_cross_lingual/`
-**Current state:** Pending
+**Current state:** Completed
 
 ### Week 5: Joint Training & Fine-Tuning
 - **Experiment 1:** Train on combined multilingual data
@@ -146,7 +146,7 @@ python 06_final_evaluation.py
 - Comprehensive performance analysis
 
 **Outputs:** `models/multilingual/`, `models/finetuned_urdu/`, `results/week5_joint_training/`
-**Current state:** Pending
+**Current state:** Completed
 
 ### Week 6: Final Evaluation & Documentation
 - Generate comprehensive dashboard
@@ -155,7 +155,7 @@ python 06_final_evaluation.py
 - Presentation materials
 
 **Outputs:** `results/week6_final/`
-**Current state:** Pending
+**Current state:** Completed
 
 ## 📈 Expected Results
 
@@ -219,12 +219,21 @@ Even small amounts of target language data significantly improve performance thr
 ### Joint Training Benefits
 Multilingual training creates more balanced representations but may slightly compromise single-language performance.
 
+### Data Quality Caveat
+The Urdu fake-news source file contains many records with replacement characters (`?`) in the original data. The preprocessing stage now reports this explicitly. If that ratio is high, Urdu metrics can be unstable or artificially inflated, so results should be interpreted with this limitation.
+
 ## 🔬 Hyperparameters
 
 ```python
-BATCH_SIZE = 16
+# Week 3 (English XLM-RoBERTa)
+BATCH_SIZE = 32
 MAX_LENGTH = 256
-LEARNING_RATE = 2e-5 (training) / 1e-5 (fine-tuning)
+LEARNING_RATE = 2e-5
+EPOCHS = 10  # early stopping enabled
+
+# Week 5 (joint + fine-tuning)
+BATCH_SIZE = 16
+LEARNING_RATE = 2e-5 (joint) / 1e-5 (fine-tuning)
 EPOCHS = 3
 OPTIMIZER = AdamW
 SCHEDULER = Linear warmup
@@ -263,6 +272,11 @@ Dependency verification status:
 ```bash
 pip install -r requirements.txt --upgrade
 ```
+
+### Urdu Text Quality Warning
+- The fake Urdu source file may contain many replacement characters (`?`) from upstream data corruption.
+- `02_data_preprocessing.py` now prints text-quality diagnostics, including rows with high `?` density.
+- If this warning is high, refresh/replace the raw Urdu source files before drawing strong conclusions.
 
 ## 📚 Citations
 
@@ -305,8 +319,8 @@ For questions or collaboration:
 
 ---
 
-**Last Updated:** April 22, 2026
+**Last Updated:** April 23, 2026
 
-**Status:** 🚧 In Progress (Weeks 1-2 complete; Weeks 3-6 pending)
+**Status:** ✅ Completed (All 6 weeks executed)
 
-**Version:** 1.0.1
+**Version:** 1.1.0

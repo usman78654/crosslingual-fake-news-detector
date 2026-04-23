@@ -7,7 +7,6 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
 import re
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -16,6 +15,54 @@ from sklearn.metrics import classification_report, accuracy_score, confusion_mat
 import seaborn as sns
 import os
 import pickle
+
+
+def normalize_column_name(col_name):
+    """Normalize column names for robust matching."""
+    clean = str(col_name).replace('\ufeff', '').strip().lower()
+    clean = re.sub(r'\s+', ' ', clean)
+    return clean
+
+
+def read_csv_with_fallback(file_path, read_options, encodings):
+    """Try multiple encoding + read-option combinations."""
+    last_error = None
+
+    for options in read_options:
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(file_path, encoding=encoding, **options)
+                if len(df.columns) <= 1:
+                    continue
+
+                df.columns = [str(col).replace('\ufeff', '').strip() for col in df.columns]
+                return df, encoding, options
+            except Exception as exc:
+                last_error = exc
+
+    raise ValueError(
+        f"Could not parse {file_path} with provided encodings/options. "
+        f"Last error: {last_error}"
+    )
+
+
+def select_text_column(df, preferred_columns):
+    """Pick text column by preference, then fallback to object columns."""
+    normalized = {normalize_column_name(col): col for col in df.columns}
+
+    for preferred in preferred_columns:
+        candidate = normalized.get(normalize_column_name(preferred))
+        if candidate is not None:
+            return candidate
+
+    excluded = {
+        'label', 'sr. no.', 'sr. no', 'sr no', 'sr_no', 'index', 'date', 'subject'
+    }
+    for col in df.columns:
+        if df[col].dtype == 'object' and normalize_column_name(col) not in excluded:
+            return col
+
+    return None
 
 def clean_text(text):
     """Basic text cleaning"""
@@ -28,52 +75,32 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-def load_and_preprocess(csv_path, language):
-    """Load and preprocess dataset"""
-    print(f"\nLoading {language} dataset from {csv_path}...")
-    # Try different encodings
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
-    df = None
-    for encoding in encodings:
-        try:
-            df = pd.read_csv(csv_path, encoding=encoding)
-            break
-        except (UnicodeDecodeError, Exception):
-            continue
-    
-    if df is None:
-        raise ValueError(f"Could not load {csv_path} with any supported encoding")
-    
-    print(f"  Shape: {df.shape}")
-    print(f"  Columns: {df.columns.tolist()}")
-    
-    # Identify text column
-    text_col = None
-    for col in df.columns:
-        if col.lower() in ['text', 'title', 'news', 'news items', 'content', 'article']:
-            text_col = col
-            break
-    
-    if text_col is None:
-        # Try to find column with string data
-        for col in df.columns:
-            if df[col].dtype == 'object' and col.lower() not in ['label', 'sr. no.', 'sr. no', 'index']:
-                text_col = col
-                break
-    
-    if text_col is None:
-        raise ValueError(f"Could not identify text column in {csv_path}")
-    
-    print(f"  Using text column: '{text_col}'")
-    
-    # Extract text and labels
-    df['text'] = df[text_col].apply(clean_text)
-    
-    # Remove empty texts
-    df = df[df['text'].str.len() > 10]
-    
-    print(f"  After cleaning: {len(df)} samples")
-    return df
+
+def print_text_quality(df, text_column, dataset_name):
+    """Print data-quality diagnostics for cleaned text."""
+    text_values = df[text_column].astype(str)
+    lengths = text_values.str.len().clip(lower=1)
+    question_density = text_values.str.count(r'\?') / lengths
+    control_chars = text_values.str.contains(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', regex=True)
+
+    heavy_question_rows = (question_density > 0.5).mean() * 100
+    control_char_rows = control_chars.mean() * 100
+
+    print(f"  Text quality ({dataset_name}):")
+    print(f"    Rows with >50% '?' characters: {heavy_question_rows:.2f}%")
+    print(f"    Rows with control characters: {control_char_rows:.2f}%")
+    if heavy_question_rows > 20:
+        print("    WARNING: High '?' ratio detected. Source text may be partially corrupted.")
+
+
+def validate_label_distribution(df, dataset_name):
+    """Ensure both classes are present before split/training."""
+    class_count = df['label'].nunique()
+    if class_count < 2:
+        raise ValueError(
+            f"{dataset_name} has {class_count} class after preprocessing. "
+            "Need at least 2 classes for stratified split and classification."
+        )
 
 def create_baseline_model(X_train, y_train, X_test, y_test, dataset_name):
     """Train baseline Logistic Regression model with TF-IDF"""
@@ -102,7 +129,7 @@ def create_baseline_model(X_train, y_train, X_test, y_test, dataset_name):
     print(f"\n{dataset_name} Baseline Results:")
     print(f"  Accuracy: {accuracy:.4f}")
     print(f"\nClassification Report:")
-    print(classification_report(y_test, y_pred, target_names=['Fake', 'True']))
+    print(classification_report(y_test, y_pred, target_names=['Fake', 'True'], zero_division=0))
     
     # Confusion Matrix
     cm = confusion_matrix(y_test, y_pred)
@@ -122,43 +149,40 @@ def main():
     # Load English Dataset
     print("\n[1/4] Processing English Dataset...")
     try:
-        # Try different encodings
-        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
-        eng_fake = None
-        eng_true = None
-        
-        for encoding in encodings:
-            try:
-                eng_fake = pd.read_csv('EnglishDataset/Fake.csv', encoding=encoding)
-                eng_true = pd.read_csv('EnglishDataset/True.csv', encoding=encoding)
-                print(f"  Loaded with encoding: {encoding}")
-                break
-            except:
-                continue
+        eng_fake, fake_encoding, _ = read_csv_with_fallback(
+            'EnglishDataset/Fake.csv',
+            read_options=[{'delimiter': ','}],
+            encodings=['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1'],
+        )
+        eng_true, true_encoding, _ = read_csv_with_fallback(
+            'EnglishDataset/True.csv',
+            read_options=[{'delimiter': ','}],
+            encodings=['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1'],
+        )
+        print(f"  Fake loaded with encoding: {fake_encoding}")
+        print(f"  True loaded with encoding: {true_encoding}")
         
         eng_fake['label'] = 0
         eng_true['label'] = 1
         
         english_df = pd.concat([eng_fake, eng_true], ignore_index=True)
         
-        # Find text column
-        text_col = None
-        for col in english_df.columns:
-            if col.lower() in ['text', 'title', 'news', 'content']:
-                text_col = col
-                break
-        
+        # Prefer article body over title for more realistic fake-news detection.
+        text_col = select_text_column(
+            english_df,
+            preferred_columns=['text', 'content', 'article', 'title', 'news'],
+        )
         if text_col is None:
-            for col in english_df.columns:
-                if english_df[col].dtype == 'object' and col.lower() != 'label':
-                    text_col = col
-                    break
+            raise ValueError("Could not identify text column in English dataset")
         
         print(f"  Using column: {text_col}")
         english_df['text'] = english_df[text_col].apply(clean_text)
         english_df = english_df[english_df['text'].str.len() > 10]
         english_df = english_df[['text', 'label']]
         english_df['language'] = 'english'
+
+        print_text_quality(english_df, 'text', 'English')
+        validate_label_distribution(english_df, 'English dataset')
         
         print(f"  Total samples: {len(english_df)}")
         print(f"  Fake: {(english_df['label']==0).sum()}")
@@ -183,24 +207,19 @@ def main():
     # Load Urdu Dataset
     print("\n[2/4] Processing Urdu Dataset...")
     try:
-        # Urdu datasets have different delimiters: Fake News uses \t, True News uses ,
-        # Try multiple encodings as the file may have encoding issues
-        encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-        urdu_fake = None
-        urdu_true = None
-        
-        for encoding in encodings:
-            try:
-                print(f"  Trying encoding: {encoding}")
-                urdu_fake = pd.read_csv('Urdu_Dataset/Fake News.csv', encoding=encoding, delimiter='\t')
-                urdu_true = pd.read_csv('Urdu_Dataset/True News.csv', encoding=encoding, delimiter=',')
-                print(f"  ✓ Successfully loaded with {encoding}")
-                break
-            except Exception as e:
-                continue
-        
-        if urdu_fake is None:
-            raise ValueError("Could not load Urdu files with any encoding")
+        # Urdu files use different formats by source.
+        urdu_fake, fake_encoding, _ = read_csv_with_fallback(
+            'Urdu_Dataset/Fake News.csv',
+            read_options=[{'delimiter': '\t'}],
+            encodings=['cp1256', 'latin-1', 'cp1252', 'iso-8859-1'],
+        )
+        urdu_true, true_encoding, _ = read_csv_with_fallback(
+            'Urdu_Dataset/True News.csv',
+            read_options=[{'delimiter': ','}],
+            encodings=['utf-8-sig', 'utf-8', 'cp1256', 'latin-1'],
+        )
+        print(f"  Fake News encoding: {fake_encoding}")
+        print(f"  True News encoding: {true_encoding}")
         
         print(f"  Fake News loaded: {urdu_fake.shape}, cols: {urdu_fake.columns.tolist()}")
         print(f"  True News loaded: {urdu_true.shape}, cols: {urdu_true.columns.tolist()}")
@@ -210,18 +229,21 @@ def main():
         
         urdu_df = pd.concat([urdu_fake, urdu_true], ignore_index=True)
         
-        # Find text column
-        text_col = None
-        for col in urdu_df.columns:
-            if 'news' in col.lower() or 'text' in col.lower():
-                text_col = col
-                break
+        text_col = select_text_column(
+            urdu_df,
+            preferred_columns=['news items', 'text', 'news', 'content', 'title'],
+        )
+        if text_col is None:
+            raise ValueError("Could not identify text column in Urdu dataset")
         
         print(f"  Using column: {text_col}")
         urdu_df['text'] = urdu_df[text_col].apply(clean_text)
         urdu_df = urdu_df[urdu_df['text'].str.len() > 10]
         urdu_df = urdu_df[['text', 'label']]
         urdu_df['language'] = 'urdu'
+
+        print_text_quality(urdu_df, 'text', 'Urdu')
+        validate_label_distribution(urdu_df, 'Urdu dataset')
         
         print(f"  Total samples: {len(urdu_df)}")
         print(f"  Fake: {(urdu_df['label']==0).sum()}")

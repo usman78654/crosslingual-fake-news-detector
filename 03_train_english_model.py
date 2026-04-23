@@ -11,7 +11,6 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import autocast, GradScaler
 from transformers import (
     XLMRobertaTokenizer, 
     XLMRobertaForSequenceClassification,
@@ -23,21 +22,48 @@ import seaborn as sns
 from tqdm import tqdm
 import os
 import json
+from contextlib import nullcontext
 
-# Check for GPU and optimize
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"\n{'='*60}")
-print(f"Using device: {device}")
-if torch.cuda.is_available():
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-    # Enable TF32 for faster computation on RTX 5080
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cuda.matmul.allow_tf32 = True
-    print(f"TensorFloat32: Enabled for faster computation")
-else:
-    print("WARNING: CUDA not available, using CPU (training will be slow)")
-print('='*60)
+def setup_device():
+    """Configure and report compute device."""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    print(f"\n{'='*60}")
+    print(f"Using device: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        # Enable TF32 for faster computation on Ada GPUs.
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        print("TensorFloat32: Enabled for faster computation")
+    else:
+        print("WARNING: CUDA not available, using CPU (training will be slow)")
+    print('='*60)
+
+    return device
+
+
+def get_autocast_context(device, enabled):
+    """Create backward-compatible autocast context."""
+    if not enabled or device.type != 'cuda':
+        return nullcontext()
+
+    if hasattr(torch, 'amp') and hasattr(torch.amp, 'autocast'):
+        return torch.amp.autocast(device_type='cuda', dtype=torch.float16)
+
+    return torch.cuda.amp.autocast(dtype=torch.float16)
+
+
+def create_grad_scaler(device, enabled):
+    """Create backward-compatible GradScaler."""
+    if not enabled or device.type != 'cuda':
+        return None
+
+    if hasattr(torch, 'amp') and hasattr(torch.amp, 'GradScaler'):
+        return torch.amp.GradScaler('cuda')
+
+    return torch.cuda.amp.GradScaler()
 
 class FakeNewsDataset(Dataset):
     """Dataset class for fake news detection"""
@@ -74,6 +100,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, scaler=None):
     """Train for one epoch with optional mixed precision"""
     model.train()
     total_loss = 0
+    use_mixed_precision = scaler is not None and device.type == 'cuda'
     
     progress_bar = tqdm(dataloader, desc='Training')
     for batch in progress_bar:
@@ -83,9 +110,9 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, scaler=None):
         attention_mask = batch['attention_mask'].to(device)
         labels = batch['labels'].to(device)
         
-        if scaler is not None:
+        if use_mixed_precision:
             # Mixed precision training for faster computation on RTX 5080
-            with autocast(dtype=torch.float16):
+            with get_autocast_context(device, enabled=True):
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -122,6 +149,7 @@ def evaluate(model, dataloader, device, scaler=None):
     predictions = []
     true_labels = []
     total_loss = 0
+    use_mixed_precision = scaler is not None and device.type == 'cuda'
     
     with torch.no_grad():
         for batch in tqdm(dataloader, desc='Evaluating'):
@@ -129,8 +157,8 @@ def evaluate(model, dataloader, device, scaler=None):
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
             
-            if scaler is not None:
-                with autocast(dtype=torch.float16):
+            if use_mixed_precision:
+                with get_autocast_context(device, enabled=True):
                     outputs = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -171,6 +199,8 @@ def main():
     print("Week 3: XLM-RoBERTa Training (English)")
     print("Optimized for NVIDIA RTX 5080")
     print("="*60)
+
+    device = setup_device()
     
     # Create directories
     os.makedirs('results/week3_model_training', exist_ok=True)
@@ -226,19 +256,24 @@ def main():
         test_df['text'], test_df['label'], tokenizer, MAX_LENGTH
     )
     
+    # Windows uses spawn workers, which re-imports modules and adds overhead.
+    num_workers = 0 if os.name == 'nt' else (2 if torch.cuda.is_available() else 0)
+
     # Use pin_memory for faster GPU data transfer
     train_loader = DataLoader(
         train_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=True, 
         pin_memory=True if torch.cuda.is_available() else False,
-        num_workers=2 if torch.cuda.is_available() else 0
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0
     )
     test_loader = DataLoader(
         test_dataset, 
         batch_size=BATCH_SIZE, 
         pin_memory=True if torch.cuda.is_available() else False,
-        num_workers=2 if torch.cuda.is_available() else 0
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0
     )
     
     print(f"  Train batches: {len(train_loader)}")
@@ -255,7 +290,7 @@ def main():
     )
     
     # Mixed precision scaler
-    scaler = GradScaler() if (USE_MIXED_PRECISION and torch.cuda.is_available()) else None
+    scaler = create_grad_scaler(device, USE_MIXED_PRECISION)
     if scaler:
         print("  ✓ Mixed precision training enabled")
     

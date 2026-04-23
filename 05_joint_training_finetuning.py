@@ -108,7 +108,7 @@ def evaluate(model, dataloader, device):
     
     accuracy = accuracy_score(true_labels, predictions)
     precision, recall, f1, _ = precision_recall_fscore_support(
-        true_labels, predictions, average='binary'
+        true_labels, predictions, average='binary', zero_division=0
     )
     
     return {
@@ -348,12 +348,7 @@ def main():
     ax1.grid(axis='y', alpha=0.3)
     ax1.set_ylim([0, 1])
     
-    # 2-4. Confusion matrices
-    cm_zero = confusion_matrix(
-        week4_results['urdu_zero_shot']['true_labels'] if 'true_labels' in week4_results['urdu_zero_shot'] else [0, 1],
-        week4_results['urdu_zero_shot']['predictions'] if 'predictions' in week4_results['urdu_zero_shot'] else [0, 1]
-    ) if 'predictions' in week4_results['urdu_zero_shot'] else confusion_matrix([0, 1], [0, 1])
-    
+    # 2-3. Confusion matrices
     cm_joint = confusion_matrix(joint_urdu_metrics['true_labels'], joint_urdu_metrics['predictions'])
     cm_ft = confusion_matrix(ft_urdu_metrics['true_labels'], ft_urdu_metrics['predictions'])
     

@@ -78,7 +78,7 @@ def evaluate(model, dataloader, device, dataset_name):
     
     accuracy = accuracy_score(true_labels, predictions)
     precision, recall, f1, _ = precision_recall_fscore_support(
-        true_labels, predictions, average='binary'
+        true_labels, predictions, average='binary', zero_division=0
     )
     
     return {
@@ -154,6 +154,10 @@ def main():
     print(f"  Precision: {urdu_results['precision']:.4f}")
     print(f"  Recall: {urdu_results['recall']:.4f}")
     print(f"  F1-Score: {urdu_results['f1']:.4f}")
+
+    urdu_positive_predictions = int(np.sum(np.array(urdu_results['predictions']) == 1))
+    if urdu_positive_predictions == 0:
+        print("  WARNING: Zero-shot model predicted no True samples on Urdu test set.")
     
     # Performance degradation analysis
     print(f"\n{'='*60}")
@@ -173,13 +177,17 @@ def main():
             'accuracy': float(english_results['accuracy']),
             'precision': float(english_results['precision']),
             'recall': float(english_results['recall']),
-            'f1': float(english_results['f1'])
+            'f1': float(english_results['f1']),
+            'predictions': [int(p) for p in english_results['predictions']],
+            'true_labels': [int(y) for y in english_results['true_labels']]
         },
         'urdu_zero_shot': {
             'accuracy': float(urdu_results['accuracy']),
             'precision': float(urdu_results['precision']),
             'recall': float(urdu_results['recall']),
-            'f1': float(urdu_results['f1'])
+            'f1': float(urdu_results['f1']),
+            'predictions': [int(p) for p in urdu_results['predictions']],
+            'true_labels': [int(y) for y in urdu_results['true_labels']]
         },
         'performance_drop': {
             'accuracy': float(accuracy_drop),
@@ -261,14 +269,16 @@ def main():
         english_results['true_labels'], 
         english_results['predictions'],
         target_names=['Fake', 'True'],
-        digits=3
+        digits=3,
+        zero_division=0
     )
     report_text += "\n\nURDU (Zero-Shot):\n"
     report_text += classification_report(
         urdu_results['true_labels'],
         urdu_results['predictions'],
         target_names=['Fake', 'True'],
-        digits=3
+        digits=3,
+        zero_division=0
     )
     
     ax5.text(0.1, 0.5, report_text, fontsize=8, family='monospace',

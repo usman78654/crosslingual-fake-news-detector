@@ -1,0 +1,2 @@
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+results/week1_exploration/english_combined.csv filter=lfs diff=lfs merge=lfs -text
