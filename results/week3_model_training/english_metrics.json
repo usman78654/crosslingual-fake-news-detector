@@ -2,5 +2,12 @@
   "accuracy": 1.0,
   "precision": 1.0,
   "recall": 1.0,
-  "f1": 1.0
+  "f1": 1.0,
+  "best_validation_f1": 1.0,
+  "selection_metric": "validation_f1",
+  "data_split": {
+    "train_samples": 27772,
+    "validation_samples": 3086,
+    "test_samples": 7715
+  }
 }
