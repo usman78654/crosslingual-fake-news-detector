@@ -102,6 +102,114 @@ def validate_label_distribution(df, dataset_name):
             "Need at least 2 classes for stratified split and classification."
         )
 
+
+def map_binary_label(value):
+    """Map flexible label strings/numbers into binary classes."""
+    if pd.isna(value):
+        return None
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    normalized = raw.upper()
+    mapping = {
+        'FAKE': 0,
+        'FAKE NEWS': 0,
+        'FALSE': 0,
+        'TRUE': 1,
+        'TRUE NEWS': 1,
+        'REAL': 1,
+    }
+
+    if normalized in mapping:
+        return mapping[normalized]
+
+    try:
+        numeric = float(raw)
+        if numeric in (0.0, 1.0):
+            return int(numeric)
+    except ValueError:
+        pass
+
+    return None
+
+
+def load_urdu_from_combined(combined_path):
+    """Load Urdu data from a single clean combined source file."""
+    df, encoding, options = read_csv_with_fallback(
+        combined_path,
+        read_options=[{'delimiter': ','}],
+        encodings=['utf-8-sig', 'utf-8', 'cp1256', 'latin-1'],
+    )
+
+    normalized = {normalize_column_name(col): col for col in df.columns}
+    label_col = normalized.get('label')
+    text_col = select_text_column(
+        df,
+        preferred_columns=['news items', 'text', 'news', 'content', 'title'],
+    )
+
+    if label_col is None:
+        raise ValueError("Combined Urdu file is missing a label column")
+    if text_col is None:
+        raise ValueError("Combined Urdu file is missing a usable text column")
+
+    working = df.copy()
+    working['text'] = working[text_col].apply(clean_text)
+    working['label'] = working[label_col].apply(map_binary_label)
+
+    valid_rows = working['label'].isin([0, 1]) & (working['text'].str.len() > 10)
+    dropped_rows = int((~valid_rows).sum())
+
+    working = working.loc[valid_rows, ['text', 'label']].copy()
+    working['label'] = working['label'].astype(int)
+    working['language'] = 'urdu'
+
+    return working, encoding, options, dropped_rows, text_col, label_col
+
+
+def validate_label_correlated_artifacts(df, text_column, dataset_name, max_gap=0.2):
+    """Fail fast if obvious text artifacts are strongly correlated with labels."""
+    per_label = {}
+
+    for label in sorted(df['label'].unique()):
+        subset = df[df['label'] == label]
+        if len(subset) == 0:
+            continue
+
+        text_values = subset[text_column].astype(str)
+        lengths = text_values.str.len().clip(lower=1)
+        question_density = text_values.str.count(r'\?') / lengths
+        contains_question = text_values.str.contains(r'\?')
+
+        per_label[int(label)] = {
+            'count': int(len(subset)),
+            'contains_q': float(contains_question.mean()),
+            'heavy_q': float((question_density > 0.5).mean()),
+        }
+
+    if 0 in per_label and 1 in per_label:
+        contains_gap = abs(per_label[0]['contains_q'] - per_label[1]['contains_q'])
+        heavy_gap = abs(per_label[0]['heavy_q'] - per_label[1]['heavy_q'])
+
+        print(f"  Artifact check ({dataset_name}):")
+        print(
+            f"    Label 0 contains '?': {per_label[0]['contains_q']*100:.2f}% | "
+            f"Label 1 contains '?': {per_label[1]['contains_q']*100:.2f}%"
+        )
+        print(
+            f"    Label 0 heavy '?': {per_label[0]['heavy_q']*100:.2f}% | "
+            f"Label 1 heavy '?': {per_label[1]['heavy_q']*100:.2f}%"
+        )
+
+        if contains_gap > max_gap or heavy_gap > max_gap:
+            raise ValueError(
+                f"{dataset_name} has label-correlated text artifacts "
+                f"(contains-gap={contains_gap:.3f}, heavy-gap={heavy_gap:.3f}). "
+                "Use a cleaner source file before training."
+            )
+
 def create_baseline_model(X_train, y_train, X_test, y_test, dataset_name):
     """Train baseline Logistic Regression model with TF-IDF"""
     print(f"\n{'='*60}")
@@ -206,49 +314,30 @@ def main():
     
     # Load Urdu Dataset
     print("\n[2/4] Processing Urdu Dataset...")
+    urdu_df = None
     try:
-        # Urdu files use different formats by source.
-        urdu_fake, fake_encoding, _ = read_csv_with_fallback(
-            'Urdu_Dataset/Fake News.csv',
-            read_options=[{'delimiter': '\t'}],
-            encodings=['cp1256', 'latin-1', 'cp1252', 'iso-8859-1'],
-        )
-        urdu_true, true_encoding, _ = read_csv_with_fallback(
-            'Urdu_Dataset/True News.csv',
-            read_options=[{'delimiter': ','}],
-            encodings=['utf-8-sig', 'utf-8', 'cp1256', 'latin-1'],
-        )
-        print(f"  Fake News encoding: {fake_encoding}")
-        print(f"  True News encoding: {true_encoding}")
-        
-        print(f"  Fake News loaded: {urdu_fake.shape}, cols: {urdu_fake.columns.tolist()}")
-        print(f"  True News loaded: {urdu_true.shape}, cols: {urdu_true.columns.tolist()}")
-        
-        urdu_fake['label'] = 0
-        urdu_true['label'] = 1
-        
-        urdu_df = pd.concat([urdu_fake, urdu_true], ignore_index=True)
-        
-        text_col = select_text_column(
-            urdu_df,
-            preferred_columns=['news items', 'text', 'news', 'content', 'title'],
-        )
-        if text_col is None:
-            raise ValueError("Could not identify text column in Urdu dataset")
-        
-        print(f"  Using column: {text_col}")
-        urdu_df['text'] = urdu_df[text_col].apply(clean_text)
-        urdu_df = urdu_df[urdu_df['text'].str.len() > 10]
-        urdu_df = urdu_df[['text', 'label']]
-        urdu_df['language'] = 'urdu'
+        combined_path = 'Urdu_Dataset/Combined .csv'
+        if not os.path.exists(combined_path):
+            raise FileNotFoundError(f"Combined Urdu source not found: {combined_path}")
+
+        urdu_df, encoding, options, dropped_rows, text_col, label_col = load_urdu_from_combined(combined_path)
+
+        print(f"  Source file: {combined_path}")
+        print(f"  Loaded with encoding: {encoding}")
+        print(f"  Parse options: {options}")
+        print(f"  Using text column: {text_col}")
+        print(f"  Using label column: {label_col}")
+        if dropped_rows > 0:
+            print(f"  Dropped rows with invalid labels/short text: {dropped_rows}")
 
         print_text_quality(urdu_df, 'text', 'Urdu')
         validate_label_distribution(urdu_df, 'Urdu dataset')
-        
+        validate_label_correlated_artifacts(urdu_df, 'text', 'Urdu dataset')
+
         print(f"  Total samples: {len(urdu_df)}")
         print(f"  Fake: {(urdu_df['label']==0).sum()}")
         print(f"  True: {(urdu_df['label']==1).sum()}")
-        
+
         # IMPORTANT: Remove duplicates BEFORE train/test split to prevent data leakage
         print(f"  Removing duplicate texts...")
         before_dedup = len(urdu_df)
@@ -256,14 +345,74 @@ def main():
         after_dedup = len(urdu_df)
         print(f"  Removed {before_dedup - after_dedup} duplicate texts")
         print(f"  Samples after deduplication: {len(urdu_df)}")
-        
+
         # Save processed data
         urdu_df.to_csv('data/processed/urdu_processed.csv', index=False)
         print(f"  ✓ Saved to data/processed/urdu_processed.csv")
-        
+
     except Exception as e:
         print(f"  ✗ Error: {e}")
-        urdu_df = None
+        print("  Falling back to separate Urdu source files...")
+
+        try:
+            # Fallback only if combined source is unavailable.
+            urdu_fake, fake_encoding, _ = read_csv_with_fallback(
+                'Urdu_Dataset/Fake News.csv',
+                read_options=[{'delimiter': '\t'}],
+                encodings=['cp1256', 'latin-1', 'cp1252', 'iso-8859-1'],
+            )
+            urdu_true, true_encoding, _ = read_csv_with_fallback(
+                'Urdu_Dataset/True News.csv',
+                read_options=[{'delimiter': ','}],
+                encodings=['utf-8-sig', 'utf-8', 'cp1256', 'latin-1'],
+            )
+            print(f"  Fake News encoding: {fake_encoding}")
+            print(f"  True News encoding: {true_encoding}")
+
+            print(f"  Fake News loaded: {urdu_fake.shape}, cols: {urdu_fake.columns.tolist()}")
+            print(f"  True News loaded: {urdu_true.shape}, cols: {urdu_true.columns.tolist()}")
+
+            urdu_fake['label'] = 0
+            urdu_true['label'] = 1
+
+            urdu_df = pd.concat([urdu_fake, urdu_true], ignore_index=True)
+
+            text_col = select_text_column(
+                urdu_df,
+                preferred_columns=['news items', 'text', 'news', 'content', 'title'],
+            )
+            if text_col is None:
+                raise ValueError("Could not identify text column in Urdu dataset")
+
+            print(f"  Using column: {text_col}")
+            urdu_df['text'] = urdu_df[text_col].apply(clean_text)
+            urdu_df = urdu_df[urdu_df['text'].str.len() > 10]
+            urdu_df = urdu_df[['text', 'label']]
+            urdu_df['language'] = 'urdu'
+
+            print_text_quality(urdu_df, 'text', 'Urdu')
+            validate_label_distribution(urdu_df, 'Urdu dataset')
+            validate_label_correlated_artifacts(urdu_df, 'text', 'Urdu dataset')
+
+            print(f"  Total samples: {len(urdu_df)}")
+            print(f"  Fake: {(urdu_df['label']==0).sum()}")
+            print(f"  True: {(urdu_df['label']==1).sum()}")
+
+            # IMPORTANT: Remove duplicates BEFORE train/test split to prevent data leakage
+            print(f"  Removing duplicate texts...")
+            before_dedup = len(urdu_df)
+            urdu_df = urdu_df.drop_duplicates(subset=['text'], keep='first')
+            after_dedup = len(urdu_df)
+            print(f"  Removed {before_dedup - after_dedup} duplicate texts")
+            print(f"  Samples after deduplication: {len(urdu_df)}")
+
+            # Save processed data
+            urdu_df.to_csv('data/processed/urdu_processed.csv', index=False)
+            print(f"  ✓ Saved to data/processed/urdu_processed.csv")
+
+        except Exception as fallback_error:
+            print(f"  ✗ Fallback error: {fallback_error}")
+            urdu_df = None
     
     # Train-Test Split
     print("\n[3/4] Creating train-test splits...")
