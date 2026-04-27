@@ -122,8 +122,10 @@ def evaluate(model, dataloader, device):
     }
 
 def train_model(model, train_loader, eval_loader_dict, optimizer, scheduler, 
-                epochs, device, model_name):
-    """Train model and track performance"""
+                epochs, device, model_name, target_accuracy=0.80,
+                early_stopping_patience=2, min_improvement=1e-4,
+                primary_language='urdu'):
+    """Train model and track performance with target-aware early stopping."""
     
     history = {
         'train_loss': [],
@@ -132,6 +134,10 @@ def train_model(model, train_loader, eval_loader_dict, optimizer, scheduler,
         'english_val_f1': [],
         'urdu_val_f1': []
     }
+
+    best_primary_accuracy = -1.0
+    epochs_without_improvement = 0
+    best_model_state = None
     
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}/{epochs}")
@@ -140,10 +146,13 @@ def train_model(model, train_loader, eval_loader_dict, optimizer, scheduler,
         train_loss = train_epoch(model, train_loader, optimizer, scheduler, device)
         print(f"Training loss: {train_loss:.4f}")
         
+        epoch_metrics = {}
+
         # Evaluate on both validation sets
         for lang, loader in eval_loader_dict.items():
             metrics = evaluate(model, loader, device)
             print(f"{lang.capitalize()} validation - Acc: {metrics['accuracy']:.4f}, F1: {metrics['f1']:.4f}")
+            epoch_metrics[lang] = metrics
             
             if lang == 'english':
                 history['english_val_acc'].append(metrics['accuracy'])
@@ -153,6 +162,51 @@ def train_model(model, train_loader, eval_loader_dict, optimizer, scheduler,
                 history['urdu_val_f1'].append(metrics['f1'])
         
         history['train_loss'].append(train_loss)
+
+        # Track early stopping using primary validation language (Urdu by default).
+        primary_metrics = epoch_metrics.get(primary_language)
+        if primary_metrics is None:
+            # Fallback to the first available language if primary is missing.
+            primary_lang, primary_metrics = next(iter(epoch_metrics.items()))
+        else:
+            primary_lang = primary_language
+
+        primary_accuracy = primary_metrics['accuracy']
+
+        if primary_accuracy > best_primary_accuracy + min_improvement:
+            best_primary_accuracy = primary_accuracy
+            epochs_without_improvement = 0
+            best_model_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
+        else:
+            if best_primary_accuracy >= target_accuracy:
+                epochs_without_improvement += 1
+                print(
+                    f"{primary_lang.capitalize()} validation accuracy plateaued above target "
+                    f"(best={best_primary_accuracy:.4f}, target={target_accuracy:.4f}, "
+                    f"patience {epochs_without_improvement}/{early_stopping_patience})."
+                )
+
+                if epochs_without_improvement >= early_stopping_patience:
+                    print(
+                        f"Early stopping {model_name}: {primary_lang} validation accuracy "
+                        f"plateaued above {target_accuracy:.2f}."
+                    )
+                    break
+            else:
+                print(
+                    f"{primary_lang.capitalize()} validation accuracy not improved, "
+                    f"but target {target_accuracy:.4f} not reached yet; continuing."
+                )
+
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        print(
+            f"Loaded best {primary_language} validation checkpoint "
+            f"(accuracy={best_primary_accuracy:.4f})."
+        )
     
     return history
 
@@ -171,6 +225,9 @@ def main():
     MAX_LENGTH = 256
     LEARNING_RATE = 2e-5
     VALIDATION_SPLIT = 0.1
+    TARGET_ACCURACY = 0.80
+    EARLY_STOPPING_PATIENCE = 2
+    MIN_IMPROVEMENT = 1e-4
     
     # ========== Experiment 1: Joint Multilingual Training ==========
     print("\n" + "="*60)
@@ -248,7 +305,7 @@ def main():
     urdu_test_loader = DataLoader(urdu_test_dataset, batch_size=BATCH_SIZE)
     
     print(f"\n[4/7] Training joint multilingual model...")
-    EPOCHS_JOINT = 3
+    EPOCHS_JOINT = 8
     optimizer = AdamW(model_joint.parameters(), lr=LEARNING_RATE)
     total_steps = len(train_loader) * EPOCHS_JOINT
     scheduler = get_linear_schedule_with_warmup(
@@ -258,7 +315,11 @@ def main():
     history_joint = train_model(
         model_joint, train_loader,
         {'english': english_val_loader, 'urdu': urdu_val_loader},
-        optimizer, scheduler, EPOCHS_JOINT, device, 'joint'
+        optimizer, scheduler, EPOCHS_JOINT, device, 'joint',
+        target_accuracy=TARGET_ACCURACY,
+        early_stopping_patience=EARLY_STOPPING_PATIENCE,
+        min_improvement=MIN_IMPROVEMENT,
+        primary_language='urdu'
     )
     
     # Save joint model
@@ -294,7 +355,7 @@ def main():
     )
     urdu_train_loader = DataLoader(urdu_train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     
-    EPOCHS_FINETUNE = 3
+    EPOCHS_FINETUNE = 8
     optimizer_ft = AdamW(model_finetuned.parameters(), lr=1e-5)  # Lower LR for fine-tuning
     total_steps_ft = len(urdu_train_loader) * EPOCHS_FINETUNE
     scheduler_ft = get_linear_schedule_with_warmup(
@@ -304,7 +365,11 @@ def main():
     history_finetune = train_model(
         model_finetuned, urdu_train_loader,
         {'english': english_val_loader, 'urdu': urdu_val_loader},
-        optimizer_ft, scheduler_ft, EPOCHS_FINETUNE, device, 'finetuned'
+        optimizer_ft, scheduler_ft, EPOCHS_FINETUNE, device, 'finetuned',
+        target_accuracy=TARGET_ACCURACY,
+        early_stopping_patience=EARLY_STOPPING_PATIENCE,
+        min_improvement=MIN_IMPROVEMENT,
+        primary_language='urdu'
     )
     
     # Save fine-tuned model

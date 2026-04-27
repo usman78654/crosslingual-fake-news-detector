@@ -4,7 +4,7 @@ CROSS-LINGUAL FAKE NEWS DETECTION USING MULTILINGUAL TRANSFORMERS
 Final Project Report
 ================================================================================
 
-Date: April 25, 2026
+Date: April 27, 2026
 Model: XLM-RoBERTa (Base)
 Languages: English, Urdu
 
@@ -16,7 +16,7 @@ This project successfully implemented a cross-lingual fake news detection system
 using XLM-RoBERTa, demonstrating effective transfer learning across languages.
 
 Key Achievements:
-✓ Trained high-performance English model (accuracy: 1.0000)
+✓ Trained high-performance English model (accuracy: 0.9995)
 ✓ Demonstrated zero-shot cross-lingual transfer to Urdu
 ✓ Improved Urdu performance through joint training and fine-tuning
 ✓ Comprehensive evaluation across multiple experimental setups
@@ -30,10 +30,10 @@ Key Achievements:
 Model: XLM-RoBERTa trained solely on English dataset
 
 Performance Metrics:
-  • Accuracy:  1.0000
+  • Accuracy:  0.9995
   • Precision: 1.0000
-  • Recall:    1.0000
-  • F1-Score:  1.0000
+  • Recall:    0.9991
+  • F1-Score:  0.9995
 
 Result: Strong baseline performance on English fake news detection.
 
@@ -43,16 +43,16 @@ Result: Strong baseline performance on English fake news detection.
 Experiment: Test English-trained model on Urdu (zero-shot)
 
 English Test Set:
-  • Accuracy:  1.0000
-  • F1-Score:  1.0000
+  • Accuracy:  0.9995
+  • F1-Score:  0.9995
 
 Urdu Test Set (Zero-Shot):
-  • Accuracy:  0.6840
-  • F1-Score:  0.0953
+  • Accuracy:  0.5043
+  • F1-Score:  0.0193
 
 Performance Drop:
-  • Accuracy:  0.3160 (31.6%)
-  • F1-Score:  0.9047
+  • Accuracy:  0.4951 (49.5%)
+  • F1-Score:  0.9802
 
 Key Finding: Model demonstrates cross-lingual capability but with significant
 performance degradation, highlighting the challenge of low-resource languages.
@@ -66,13 +66,13 @@ Urdu Test Set Performance:
 
 Approach              Accuracy   Precision  Recall     F1-Score
 ────────────────────────────────────────────────────────────────
-Zero-Shot             0.6840     1.0000     0.0501     0.0953
-Joint Multilingual    1.0000     1.0000     1.0000     1.0000
-Fine-Tuned            1.0000     1.0000     1.0000     1.0000
+Zero-Shot             0.5043     0.6923     0.0098     0.0193
+Joint Multilingual    0.9078     0.9310     0.8803     0.9049
+Fine-Tuned            0.9333     0.9146     0.9554     0.9345
 
 Performance Improvements over Zero-Shot:
-  • Joint Training:  +0.3160 accuracy
-  • Fine-Tuning:     +0.3160 accuracy
+  • Joint Training:  +0.4035 accuracy
+  • Fine-Tuning:     +0.4290 accuracy
 
 Key Finding: Both joint training and fine-tuning significantly improve Urdu
 performance, with fine-tuning showing the best results.
@@ -113,7 +113,7 @@ performance, with fine-tuning showing the best results.
 4.1 Cross-Lingual Transfer
 ────────────────────────────
 Finding: XLM-RoBERTa enables zero-shot transfer but with accuracy drop of
-0.3160 (31.6%)
+0.4951 (49.5%)
 
 Implication: While multilingual transformers share semantic space across languages,
 language-specific patterns in fake news require targeted adaptation.
@@ -121,8 +121,8 @@ language-specific patterns in fake news require targeted adaptation.
 
 4.2 Training Strategy Impact
 ────────────────────────────
-Finding: Fine-tuning yields best Urdu performance (1.0000), improving
-0.3160 over zero-shot
+Finding: Fine-tuning yields best Urdu performance (0.9333), improving
+0.4290 over zero-shot
 
 Implication: Even small amounts of target language data significantly improve
 cross-lingual performance through fine-tuning.
@@ -130,7 +130,7 @@ cross-lingual performance through fine-tuning.
 
 4.3 Joint Multilingual Training
 ────────────────────────────────
-Finding: Joint training improves Urdu performance to 1.0000
+Finding: Joint training improves Urdu performance to 0.9078
 
 Implication: Multilingual training creates more balanced representations but may
 slightly compromise single-language performance.
@@ -185,8 +185,8 @@ Future Directions:
 This project successfully demonstrates the viability of cross-lingual fake news
 detection using multilingual transformers. Key findings include:
 
-1. XLM-RoBERTa achieves strong performance on English (1.0000 accuracy)
-2. Zero-shot transfer to Urdu is possible but limited (0.6840 accuracy)
+1. XLM-RoBERTa achieves strong performance on English (0.9995 accuracy)
+2. Zero-shot transfer to Urdu is possible but limited (0.5043 accuracy)
 3. Fine-tuning significantly improves low-resource language performance
 4. The system provides a foundation for multilingual misinformation detection
 

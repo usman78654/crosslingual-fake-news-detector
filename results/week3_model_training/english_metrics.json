@@ -1,9 +1,9 @@
 {
-  "accuracy": 1.0,
+  "accuracy": 0.9994815294880104,
   "precision": 1.0,
-  "recall": 1.0,
-  "f1": 1.0,
-  "best_validation_f1": 1.0,
+  "recall": 0.999056158565361,
+  "f1": 0.9995278564683664,
+  "best_validation_f1": 0.999409681227863,
   "selection_metric": "validation_f1",
   "data_split": {
     "train_samples": 27772,
